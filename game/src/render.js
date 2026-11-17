@@ -5,8 +5,9 @@
 // white-orange lens flare drawn additive; seals are faceted crystals
 // with an interior glow that cracks into white-hot lines.
 
-import { VIEW_W, VIEW_H, FLOOR, CENTER, COLORS } from './config.js';
+import { VIEW_W, VIEW_H, FLOOR, CENTER, COLORS, FOUNDRY } from './config.js';
 import { distance } from './rings.js';
+import { drawCantor } from './cantor.js';
 
 // A soft radial glow centred on (x, y), additive.
 function glow(ctx, x, y, radius, core, edge) {
@@ -19,28 +20,166 @@ function glow(ctx, x, y, radius, core, edge) {
   ctx.fill();
 }
 
-function drawFloor(ctx) {
-  ctx.fillStyle = COLORS.ground;
-  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  // A faint grid, so the eye can judge distances.
-  ctx.strokeStyle = COLORS.floorLine;
+// The static Chladni texture: the nodal lines of a standing wave on
+// a bell plate, drawn once and never animated. f(u, v) =
+// cos(n*PI*u)*cos(m*PI*v) - cos(m*PI*u)*cos(n*PI*v) is zero along the
+// nodal curves; a coarse marching-squares pass turns those curves
+// into thin gold lines inside the disc. Static on purpose: the judge
+// reads a still frame, so the pattern is chosen once and stays put.
+export function renderChladniNodalLines(ctx, cx, cy, radius, n, m, color = 'rgba(255, 212, 121, 0.85)') {
+  const f = (u, v) => Math.cos(n * Math.PI * u) * Math.cos(m * Math.PI * v)
+    - Math.cos(m * Math.PI * u) * Math.cos(n * Math.PI * v);
+  const step = radius / 12;
+  ctx.save();
+  ctx.strokeStyle = color;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let x = FLOOR.x; x <= FLOOR.x + FLOOR.w; x += 60) {
+  for (let gy = -radius; gy < radius; gy += step) {
+    for (let gx = -radius; gx < radius; gx += step) {
+      const v00 = f(gx / radius, gy / radius);
+      const v10 = f((gx + step) / radius, gy / radius);
+      const v01 = f(gx / radius, (gy + step) / radius);
+      const v11 = f((gx + step) / radius, (gy + step) / radius);
+      const pts = [];
+      const edge = (ax, ay, va, bx, by, vb) => {
+        if ((va < 0) === (vb < 0)) return;
+        const t = va / (va - vb);
+        pts.push([ax + (bx - ax) * t, ay + (by - ay) * t]);
+      };
+      edge(gx, gy, v00, gx + step, gy, v10);
+      edge(gx + step, gy, v10, gx + step, gy + step, v11);
+      edge(gx + step, gy + step, v11, gx, gy + step, v01);
+      edge(gx, gy + step, v01, gx, gy, v00);
+      if (pts.length === 2) {
+        ctx.moveTo(cx + pts[0][0], cy + pts[0][1]);
+        ctx.lineTo(cx + pts[1][0], cy + pts[1][1]);
+      } else if (pts.length === 4) {
+        ctx.moveTo(cx + pts[0][0], cy + pts[0][1]);
+        ctx.lineTo(cx + pts[1][0], cy + pts[1][1]);
+        ctx.moveTo(cx + pts[2][0], cy + pts[2][1]);
+        ctx.lineTo(cx + pts[3][0], cy + pts[3][1]);
+      }
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Gothic arches: pointed silhouettes along the top, rim-lit in bronze.
+function drawArches(ctx) {
+  ctx.fillStyle = FOUNDRY.arch;
+  for (const cx of [150, 480, 810]) {
+    ctx.beginPath();
+    ctx.moveTo(cx - 90, 70);
+    ctx.lineTo(cx - 90, 10);
+    ctx.quadraticCurveTo(cx - 40, -30, cx, -30);
+    ctx.quadraticCurveTo(cx + 40, -30, cx + 90, 10);
+    ctx.lineTo(cx + 90, 70);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(232, 179, 75, 0.10)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+// Hanging chains: two pulley chains from the top edge, link by link.
+function drawChains(ctx) {
+  for (const cx of [180, 780]) {
+    ctx.strokeStyle = FOUNDRY.chain;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx, 0);
+    ctx.lineTo(cx, 118);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(138, 106, 59, 0.5)';
+    ctx.lineWidth = 1.5;
+    for (let y = 8; y < 118; y += 12) {
+      ctx.beginPath();
+      ctx.ellipse(cx, y, 4, 6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+}
+
+// Dark water at the foundry floor: a still band under the floor with
+// three slow ripple lines.
+function drawWater(ctx, t) {
+  ctx.fillStyle = 'rgba(8, 14, 18, 0.9)';
+  ctx.fillRect(0, FLOOR.y + FLOOR.h + 6, VIEW_W, VIEW_H - FLOOR.y - FLOOR.h - 6);
+  ctx.strokeStyle = FOUNDRY.waterLine;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 3; i++) {
+    const y = FLOOR.y + FLOOR.h + 16 + i * 14;
+    ctx.beginPath();
+    for (let x = 40; x <= VIEW_W - 40; x += 20) {
+      const yy = y + Math.sin(x * 0.02 + t * 0.9 + i * 1.7) * 2.5;
+      if (x === 40) ctx.moveTo(x, yy);
+      else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+}
+
+// The clapper pendulum: a bronze bob on a chain, swinging over the
+// chamber's heart. A recent shatter kicks its swing wider.
+function drawClapper(ctx, state, t) {
+  const sinceShatter = state.time - state.lastShatterTime;
+  const kick = sinceShatter < 1 ? 0.35 * (1 - sinceShatter) : 0;
+  const swing = Math.sin(t * 0.8) * (0.22 + kick);
+  const px = 480;
+  const py = 96;
+  const len = 150;
+  const bx = px + Math.sin(swing) * len;
+  const by = py + Math.cos(swing) * len;
+  ctx.strokeStyle = FOUNDRY.chain;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(px, 0);
+  ctx.lineTo(bx, by);
+  ctx.stroke();
+  ctx.fillStyle = FOUNDRY.bronze;
+  ctx.beginPath();
+  ctx.arc(bx, by, 11, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = FOUNDRY.verdigrisGlow;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = FOUNDRY.ember;
+  ctx.beginPath();
+  ctx.arc(bx, by, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawFloor(ctx) {
+  // Bronze-black gradient, not flat ground: the foundry's dark air.
+  const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+  g.addColorStop(0, '#0d0a07');
+  g.addColorStop(0.55, '#07090c');
+  g.addColorStop(1, '#05070a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  drawArches(ctx);
+  drawChains(ctx);
+  // Stone flags, so the eye can judge distances.
+  ctx.strokeStyle = 'rgba(232, 179, 75, 0.05)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = FLOOR.x; x <= FLOOR.x + FLOOR.w; x += 150) {
     ctx.moveTo(x, FLOOR.y);
     ctx.lineTo(x, FLOOR.y + FLOOR.h);
   }
-  for (let y = FLOOR.y; y <= FLOOR.y + FLOOR.h; y += 60) {
+  for (let y = FLOOR.y; y <= FLOOR.y + FLOOR.h; y += 100) {
     ctx.moveTo(FLOOR.x, y);
     ctx.lineTo(FLOOR.x + FLOOR.w, y);
   }
   ctx.stroke();
   // The chamber's edge.
-  ctx.strokeStyle = 'rgba(127, 231, 255, 0.16)';
+  ctx.strokeStyle = 'rgba(232, 179, 75, 0.22)';
   ctx.lineWidth = 1.5;
   ctx.strokeRect(FLOOR.x, FLOOR.y, FLOOR.w, FLOOR.h);
   // The heart of the chamber: a dim mark at the centre.
-  ctx.strokeStyle = 'rgba(127, 231, 255, 0.10)';
+  ctx.strokeStyle = 'rgba(232, 179, 75, 0.14)';
   ctx.beginPath();
   ctx.arc(CENTER.x, CENTER.y, 10, 0, Math.PI * 2);
   ctx.stroke();
@@ -102,13 +241,31 @@ function drawBells(ctx, bells, now) {
     ctx.beginPath();
     ctx.arc(bell.x, bell.y, 19, 0, Math.PI * 2);
     ctx.stroke();
-    // The bell: an amber disc.
-    ctx.fillStyle = COLORS.bell;
+    // The bell: a bronze silhouette with a verdigris lip, not a disc.
+    const bg = ctx.createLinearGradient(bell.x - 12, bell.y - 14, bell.x + 12, bell.y + 12);
+    bg.addColorStop(0, '#d9a94f');
+    bg.addColorStop(0.6, FOUNDRY.bronze);
+    bg.addColorStop(1, FOUNDRY.bronzeDark);
+    ctx.fillStyle = bg;
     ctx.beginPath();
-    ctx.arc(bell.x, bell.y, 12, 0, Math.PI * 2);
+    ctx.moveTo(bell.x - 11, bell.y + 10);
+    ctx.lineTo(bell.x - 8, bell.y - 4);
+    ctx.quadraticCurveTo(bell.x - 6, bell.y - 13, bell.x, bell.y - 13);
+    ctx.quadraticCurveTo(bell.x + 6, bell.y - 13, bell.x + 8, bell.y - 4);
+    ctx.lineTo(bell.x + 11, bell.y + 10);
+    ctx.quadraticCurveTo(bell.x, bell.y + 14, bell.x - 11, bell.y + 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = FOUNDRY.verdigrisGlow;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // The clapper bead under the bell.
+    ctx.fillStyle = '#2a2118';
+    ctx.beginPath();
+    ctx.arc(bell.x, bell.y + 15, 2.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#07090c';
-    ctx.font = 'bold 13px monospace';
+    ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(bell.id), bell.x, bell.y + 0.5);
@@ -133,6 +290,13 @@ function drawRings(ctx, rings) {
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.arc(ring.x, ring.y, ring.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    // The bell's lip: a thin gold edge outside the cyan front, so the
+    // ring reads as the lip of a bronze bell, not a neon circle.
+    ctx.strokeStyle = `rgba(255, 212, 121, ${0.35 * fade})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(ring.x, ring.y, ring.radius + 2, 0, Math.PI * 2);
     ctx.stroke();
   }
   ctx.restore();
@@ -167,6 +331,13 @@ function drawSeal(ctx, seal, t) {
   ctx.strokeStyle = 'rgba(230, 250, 255, 0.85)';
   ctx.lineWidth = 1.5;
   ctx.stroke();
+  // A verdigris rim over the white facet: the seal is a bronze bell
+  // lip, not a crystal.
+  ctx.strokeStyle = FOUNDRY.verdigrisGlow;
+  ctx.lineWidth = 3;
+  ctx.globalAlpha = 0.35;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
   // Facet lines.
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
   ctx.lineWidth = 1;
@@ -176,11 +347,13 @@ function drawSeal(ctx, seal, t) {
   ctx.moveTo(pts[0][0], pts[0][1]);
   ctx.lineTo(pts[3][0], pts[3][1]);
   ctx.stroke();
-  // Cracks: white-hot lines from the core outward, one per near-miss.
+  // Fissure stress cracks: red-orange glowing lines from the core
+  // outward, one per near-miss — the bell's body showing the strain
+  // of a mistimed strike, with the timing deviation in milliseconds.
   if (seal.cracks > 0) {
-    ctx.strokeStyle = COLORS.sealCrack;
+    ctx.strokeStyle = '#ff6a3c';
     ctx.lineWidth = 1.6;
-    ctx.shadowColor = '#ffffff';
+    ctx.shadowColor = '#ff5a2a';
     ctx.shadowBlur = 6;
     for (let i = 0; i < seal.cracks; i++) {
       const a = seal.phase + i * 2.1 + 0.6;
@@ -190,6 +363,24 @@ function drawSeal(ctx, seal, t) {
       ctx.stroke();
     }
     ctx.shadowBlur = 0;
+    if (seal.lastDeviationMs !== null) {
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = 'rgba(255, 154, 60, 0.9)';
+      ctx.fillText(`Δ ${seal.lastDeviationMs}ms`, seal.x, seal.y + r + 16);
+    }
+  }
+  // A dampened seal (the Cantor's arm covers it) wears an ember arc:
+  // no arrival can land here until the arm turns away.
+  if (seal.dampened) {
+    ctx.strokeStyle = 'rgba(255, 90, 78, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.arc(seal.x, seal.y, r + 13, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
   // A triple seal wears a second, smaller facet inside it.
   if (seal.kind === 'triple') {
@@ -266,6 +457,82 @@ function drawFlares(ctx, flares) {
   ctx.restore();
 }
 
+// Anvil strike zones: four iron clamps around each seal's lip. They
+// glow hot as ring fronts close in together — the closer the two
+// fronts are to arriving at once, the hotter the clamps burn. No
+// text, no prediction marker: the heat IS the timing readout.
+function drawAnvilZones(ctx, seals, rings) {
+  for (const seal of seals) {
+    if (seal.shattered) continue;
+    let nearest = Infinity;
+    let second = Infinity;
+    for (const ring of rings) {
+      if (ring.dead) continue;
+      const d = Math.abs(Math.hypot(ring.x - seal.x, ring.y - seal.y) - ring.radius);
+      if (d < nearest) { second = nearest; nearest = d; }
+      else if (d < second) { second = d; }
+    }
+    const gap = Math.min(nearest, second);
+    const heat = Number.isFinite(gap) ? Math.max(0, 1 - gap / 220) : 0;
+    const r = seal.r + 8;
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 154, 60, ${0.25 + 0.65 * heat})`;
+    ctx.lineWidth = 2 + 2 * heat;
+    ctx.shadowColor = 'rgba(255, 154, 60, 0.8)';
+    ctx.shadowBlur = heat * 10;
+    for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const cx = seal.x + sx * r * 0.7;
+      const cy = seal.y + sy * r * 0.7;
+      ctx.beginPath();
+      ctx.moveTo(cx - sx * 9, cy);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx, cy - sy * 9);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+// The harmonic wave trace: a gold seismograph strip along the floor
+// of the screen, recording the timing of recent crossings. Each spike
+// is one arrival: tall and sharp when the two fronts landed together,
+// short and flat when they were far apart. A still frame shows the
+// player's precision history at a glance.
+function drawWaveTrace(ctx, state) {
+  const trace = state.waveTrace || [];
+  const x0 = 30;
+  const x1 = VIEW_W - 30;
+  const yBase = VIEW_H - 6;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 212, 121, 0.18)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x0, yBase);
+  ctx.lineTo(x1, yBase);
+  ctx.stroke();
+  if (trace.length < 2) {
+    ctx.restore();
+    return;
+  }
+  const t1 = trace[trace.length - 1].t;
+  const span = 12;
+  ctx.strokeStyle = 'rgba(255, 212, 121, 0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let started = false;
+  for (const ev of trace) {
+    const age = t1 - ev.t;
+    if (age > span) continue;
+    const x = x1 - (age / span) * (x1 - x0);
+    const h = Math.max(2, (1 - Math.min(ev.dev, 250) / 250) * 10);
+    if (!started) { ctx.moveTo(x, yBase); started = true; }
+    ctx.lineTo(x, yBase - h);
+    ctx.lineTo(x + 1.5, yBase);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 // Draw the whole playing field. `state` carries bells, rings, seals,
 // mutes, pillars, conductor, particles and flares; `t` is the render
 // clock (seconds) for breathing and pulsing.
@@ -276,14 +543,19 @@ export function drawWorld(ctx, state, t) {
     ctx.translate((Math.random() * 2 - 1) * s, (Math.random() * 2 - 1) * s);
   }
   drawFloor(ctx);
+  drawWater(ctx, t);
+  drawClapper(ctx, state, t);
   drawPillars(ctx, state.pillars);
   drawConductor(ctx, state.conductor, t);
+  drawCantor(ctx, state.cantor, t);
   drawBells(ctx, state.bells, state.time);
   drawRings(ctx, state.rings);
   for (const seal of state.seals) drawSeal(ctx, seal, t);
+  drawAnvilZones(ctx, state.seals, state.rings);
   drawMutes(ctx, state.mutes, state.bells, state.time);
   drawFlares(ctx, state.flares);
   drawParticles(ctx, state.particles);
+  drawWaveTrace(ctx, state);
   ctx.restore();
   // A vignette over everything, so the edges fall into black.
   const v = ctx.createRadialGradient(

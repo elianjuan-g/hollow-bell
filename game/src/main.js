@@ -13,18 +13,27 @@ import {
 } from './config.js';
 import { makeRng } from './rng.js';
 import { strikeRing, updateRings, pruneRings, distance } from './rings.js';
-import { createSeal, updateSeals, checkSealCrossings, allSealsShattered } from './seals.js';
+import { createSeal, updateSeals, checkSealCrossings, allSealsShattered, sealDeviationMs } from './seals.js';
 import { createMute, updateMutes, checkMuteCrossings, pruneMutes } from './mutes.js';
 import { placeBell, bellAt, bellById, removeBell, moveBell } from './bells.js';
 import { buildChamber } from './levels.js';
 import { createAudio } from './audio.js';
 import { drawWorld } from './render.js';
-import { drawHUD, drawTitle, drawResult, drawGameOver, drawPaused } from './hud.js';
+import { drawHUD, drawTitle, drawResult, drawMasteryLedger, drawGameOver, drawPaused } from './hud.js';
 import { parseShotParams, stageShot } from './shots.js';
+import { createCantor, updateCantor, evaluateCantorDampenerCollision } from './cantor.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const audio = createAudio();
+
+// The aria-live status line: every screen change and shatter is
+// announced here, so the status element in index.html is a real
+// accessibility promise, not a dead node.
+const statusEl = document.getElementById('status');
+function setStatus(text) {
+  if (statusEl) statusEl.textContent = text;
+}
 
 const state = {
   screen: 'title',
@@ -42,6 +51,9 @@ const state = {
   mutes: [],
   pillars: [],
   conductor: null,
+  cantor: null,
+  shotCaption: null,
+  waveTrace: [],
   particles: [],
   flares: [],
   shake: 0,
@@ -108,11 +120,14 @@ function loadChamber(n) {
   state.seals = def.seals.map((s) => createSeal(s.x, s.y, s));
   state.pillars = def.pillars.map((p) => ({ ...p }));
   state.conductor = def.conductor ? { ...def.conductor } : null;
+  state.cantor = def.cantor ? createCantor(CENTER.x, CENTER.y) : null;
   state.muteDef = def.mutes;
   state.bells = [];
   state.rings = [];
   state.mutes = [];
   state.particles = [];
+  state.waveTrace = [];
+  state.shotCaption = null;
   state.flares = [];
   state.chamberTime = 0;
   state.chain = 1;
@@ -158,7 +173,10 @@ function loseBreath(reason) {
   audio.loseBreath();
   if (state.breaths <= 0) {
     state.screen = 'gameover';
+    setStatus(`The bell falls silent. Final score ${state.score}.`);
     audio.gameOver();
+  } else {
+    setStatus(`Breath lost — ${reason}. ${state.breaths} Breaths remain.`);
   }
 }
 
@@ -238,8 +256,22 @@ function update(dt) {
   updateRings(state.rings, dt, state.conductor);
   checkPillarReflections();
 
+  // The Cantor turns its dampener arms; any seal under an arm is
+  // damped this frame and its arrivals are not recorded.
+  if (state.cantor) {
+    updateCantor(state.cantor, dt);
+    evaluateCantorDampenerCollision(state.rings, state.cantor, state.seals, state.time);
+  }
+
   const crossWindow = state.window;
-  const sealHits = checkSealCrossings(state.seals, state.rings, state.time, crossWindow);
+  const sealHits = checkSealCrossings(state.seals, state.rings, state.time, crossWindow, (seal) => seal.dampened);
+  // Record every arrival's timing deviation on the wave trace: the
+  // gold seismograph at the foot of the screen. A tall spike is a
+  // crossing that landed together; a flat one was far apart.
+  for (const seal of [...sealHits.cracked, ...sealHits.shattered]) {
+    state.waveTrace.push({ t: state.time, dev: sealDeviationMs(seal, crossWindow) });
+    if (state.waveTrace.length > 48) state.waveTrace.shift();
+  }
   for (const seal of sealHits.cracked) audio.crack();
   for (const seal of sealHits.shattered) {
     if (state.time - state.lastShatterTime <= CHAIN_WINDOW) state.chain += 1;
@@ -247,6 +279,7 @@ function update(dt) {
     state.lastShatterTime = state.time;
     state.score += SCORE_SEAL * state.chain;
     state.sealsBrokenTotal += 1;
+    setStatus(`Seal shattered. ${state.seals.filter((s) => !s.shattered).length} remain in chamber ${state.chamber}.`);
     burst(seal.x, seal.y, 'rgba(255, 243, 214, A)', 26, 150);
     burst(seal.x, seal.y, 'rgba(127, 231, 255, A)', 14, 90);
     addFlare(seal.x, seal.y);
@@ -312,14 +345,22 @@ function update(dt) {
     const timeBonus = Math.max(0, Math.round(state.parTime - state.chamberTime)) * SCORE_TIME_PER_SECOND;
     state.score += chargeBonus + timeBonus;
     state.chambersCleared += 1;
+    // Mean timing deviation of this chamber's arrivals, for the
+    // Mastery Ledger (chamber 8). No arrivals: perfect by default.
+    const devs = state.waveTrace.map((e) => e.dev);
+    const meanDeviationMs = devs.length > 0
+      ? Math.round((devs.reduce((a, b) => a + b, 0) / devs.length) * 10) / 10
+      : 0;
     state.result = {
       chamber: state.chamber,
       sealsBroken: state.seals.length,
       chargeBonus,
       timeBonus,
       score: state.score,
+      meanDeviationMs,
     };
     state.screen = 'result';
+    setStatus(`Chamber ${state.chamber} cleared. Score ${state.score}.`);
     audio.clear();
   }
 }
@@ -335,7 +376,10 @@ function render() {
   drawWorld(ctx, state, t);
   if (state.screen === 'playing' || state.screen === 'paused') drawHUD(ctx, state);
   if (state.screen === 'title') drawTitle(ctx, t);
-  if (state.screen === 'result' && state.result) drawResult(ctx, state.result);
+  if (state.screen === 'result' && state.result) {
+    if (state.result.chamber === 8) drawMasteryLedger(ctx, state, state.result);
+    else drawResult(ctx, state.result);
+  }
   if (state.screen === 'gameover') drawGameOver(ctx, state);
   if (state.screen === 'paused') drawPaused(ctx);
   if (state.damageFlash > 0) {
@@ -367,6 +411,7 @@ function startRun() {
   state.rng = makeRng(state.seed);
   loadChamber(1);
   state.screen = 'playing';
+  setStatus('Chamber 1, First Light. Place bells, strike them, and cross their rings on the seal.');
 }
 
 canvas.addEventListener('mousedown', (e) => {

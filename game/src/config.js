@@ -81,6 +81,50 @@ export const COLORS = {
 
 export const FONT = '"SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace';
 
+// The Sunken Carillon: the eight chambers of a run, as one declarative
+// table. Each entry names the chamber, its Chladni nodal pair (n, m)
+// for the static gold pattern, its palette, and the boss phase rule
+// ('none' until chamber 8, where the Silent Cantor wakes). levels.js
+// reads the names from here, so the table is the single source of
+// chamber identity. Chambers 1-6 teach one mechanic each; 7-8 are the
+// exam (6 teaching + 2 exam), and past 8 the endless deep chambers.
+export const CARILLON_CHAMBERS_SPEC = [
+  { name: 'FIRST LIGHT',       chladniN: 2, chladniM: 1, palette: 'copper',    boss: 'none' },
+  { name: 'DRIFT',             chladniN: 3, chladniM: 1, palette: 'copper',    boss: 'none' },
+  { name: 'VERDIGRIS NAVE',    chladniN: 3, chladniM: 2, palette: 'verdigris', boss: 'none' },
+  { name: 'HUNGER',            chladniN: 4, chladniM: 2, palette: 'verdigris', boss: 'none' },
+  { name: 'TRINITY',           chladniN: 3, chladniM: 3, palette: 'ember',     boss: 'none' },
+  { name: 'THE CONDUCTOR',     chladniN: 4, chladniM: 3, palette: 'ember',     boss: 'none' },
+  { name: 'CHOIR OF STONE',    chladniN: 5, chladniM: 3, palette: 'ember',     boss: 'none' },
+  { name: 'THE SILENT CANTOR', chladniN: 5, chladniM: 4, palette: 'parchment', boss: 'cantor' },
+];
+
+// Palettes: the secondary colour of each shot's world. Title is
+// blue-copper-gold, the middle chambers green patina-gold, the boss
+// red ember-gold, the ledger parchment-gold.
+export const PALETTES = {
+  copper:     { primary: '#e8b34b', secondary: '#7fb8d8' },
+  verdigris:  { primary: '#7fc4a8', secondary: '#ffd479' },
+  ember:      { primary: '#ff9a3c', secondary: '#ff5a4e' },
+  parchment:  { primary: '#f2e3c0', secondary: '#ffd479' },
+};
+
+// Belfry Foundry colours: old bronze, verdigris patina, ember sparks,
+// dark water at the floor of the foundry, parchment for the ledger.
+export const FOUNDRY = {
+  bronze: '#8a6a3b',
+  bronzeDark: '#4a3820',
+  verdigris: '#5f9e86',
+  verdigrisGlow: 'rgba(127, 196, 168, 0.5)',
+  ember: '#ff9a3c',
+  emberHot: '#ffb35c',
+  water: 'rgba(60, 110, 140, 0.35)',
+  waterLine: 'rgba(127, 196, 220, 0.18)',
+  chain: '#3d3428',
+  arch: 'rgba(20, 16, 12, 0.9)',
+  parchment: '#f2e3c0',
+};
+
 // Ranks for the result and game-over screens, by total score.
 export const RANKS = [
   { min: 8000, name: 'GRAND CANTOR' },
